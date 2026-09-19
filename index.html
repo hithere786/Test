@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1.0"
+>
+
+<title>Live Bluetooth Dictation</title>
+
+<style>
+
+body {
+  font-family: Arial, sans-serif;
+  background: #f5f5f5;
+  margin: 0;
+  padding: 30px;
+}
+
+.card {
+  max-width: 650px;
+  margin: 30px auto;
+  background: white;
+  padding: 30px;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0,0,0,.12);
+}
+
+h1 {
+  margin-top: 0;
+}
+
+button {
+  width: 100%;
+  padding: 15px;
+  border: none;
+  border-radius: 7px;
+  font-size: 17px;
+  cursor: pointer;
+  margin-top: 10px;
+}
+
+#startButton {
+  background: #1a73e8;
+  color: white;
+}
+
+#stopButton {
+  background: #d93025;
+  color: white;
+  display: none;
+}
+
+#status {
+  margin: 20px 0;
+  font-weight: bold;
+}
+
+#transcript {
+  border: 1px solid #ddd;
+  border-radius: 7px;
+  padding: 15px;
+  min-height: 150px;
+  background: #fafafa;
+  line-height: 1.6;
+}
+
+#interim {
+  color: #777;
+}
+
+#log {
+  margin-top: 20px;
+  font-size: 12px;
+  color: #666;
+  white-space: pre-wrap;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="card">
+
+<h1>🎙️ Live Bluetooth Dictation</h1>
+
+<p>
+Speak normally. Finalized sentences will be sent
+to your Google Sheet.
+</p>
+
+<button id="startButton">
+Start Listening
+</button>
+
+<button id="stopButton">
+Stop Listening
+</button>
+
+<div id="status">
+Status: Ready
+</div>
+
+<div id="transcript">
+Waiting for speech...
+</div>
+
+<div id="log"></div>
+
+</div>
+
+
+<script>
+
+
+/*
+ * ============================================================
+ * CONFIGURATION
+ * ============================================================
+ *
+ * Paste your Apps Script Web App URL here.
+ */
+
+const APPS_SCRIPT_URL =
+  'https://script.google.com/a/macros/glfschools.org/s/AKfycbzUWpEQ_NXlAMnw2Gm9RdxmytS1wo8v7LH9y0A9Ue406W4RYPV3mkLOtknyCnT4aeya/exec;
+
+
+/*
+ * ============================================================
+ * ELEMENTS
+ * ============================================================
+ */
+
+const startButton =
+  document.getElementById('startButton');
+
+const stopButton =
+  document.getElementById('stopButton');
+
+const status =
+  document.getElementById('status');
+
+const transcript =
+  document.getElementById('transcript');
+
+const log =
+  document.getElementById('log');
+
+
+/*
+ * ============================================================
+ * SPEECH API
+ * ============================================================
+ */
+
+const SpeechRecognition =
+  window.SpeechRecognition ||
+  window.webkitSpeechRecognition;
+
+
+if (!SpeechRecognition) {
+
+  status.textContent =
+    '❌ Speech Recognition is not supported by this browser.';
+
+  startButton.disabled = true;
+
+}
+
+
+/*
+ * ============================================================
+ * STATE
+ * ============================================================
+ */
+
+let recognition = null;
+
+let listening = false;
+
+let shouldRestart = false;
+
+let finalTranscript = '';
+
+
+/*
+ * ============================================================
+ * CREATE RECOGNITION
+ * ============================================================
+ */
+
+if (SpeechRecognition) {
+
+  recognition =
+    new SpeechRecognition();
+
+  recognition.continuous = true;
+
+  recognition.interimResults = true;
+
+  recognition.lang = 'en-US';
+
+}
+
+
+/*
+ * ============================================================
+ * START
+ * ============================================================
+ */
+
+startButton.addEventListener(
+  'click',
+  async function() {
+
+    try {
+
+      /*
+       * First explicitly request microphone permission.
+       *
+       * This is important because it makes Chrome's
+       * microphone permission happen before speech
+       * recognition starts.
+       */
+
+      const stream =
+        await navigator.mediaDevices.getUserMedia({
+          audio: true
+        });
+
+      /*
+       * We only need the permission.
+       * SpeechRecognition handles the actual microphone.
+       */
+
+      stream.getTracks().forEach(
+        track => track.stop()
+      );
+
+
+      shouldRestart = true;
+
+      finalTranscript = '';
+
+      transcript.textContent =
+        'Listening...';
+
+
+      recognition.start();
+
+    } catch (error) {
+
+      showError(
+        'Microphone permission failed:\n' +
+        error.name +
+        '\n' +
+        error.message
+      );
+
+    }
+
+  }
+);
+
+
+/*
+ * ============================================================
+ * STOP
+ * ============================================================
+ */
+
+stopButton.addEventListener(
+  'click',
+  function() {
+
+    shouldRestart = false;
+
+    if (recognition) {
+      recognition.stop();
+    }
+
+  }
+);
+
+
+/*
+ * ============================================================
+ * START EVENT
+ * ============================================================
+ */
+
+if (recognition) {
+
+  recognition.onstart =
+    function() {
+
+      listening = true;
+
+      startButton.style.display =
+        'none';
+
+      stopButton.style.display =
+        'block';
+
+      status.textContent =
+        '🔴 Listening to microphone...';
+
+    };
+
+
+  /*
+   * ==========================================================
+   * END EVENT
+   * ==========================================================
+   */
+
+  recognition.onend =
+    function() {
+
+      listening = false;
+
+      startButton.style.display =
+        'block';
+
+      stopButton.style.display =
+        'none';
+
+
+      /*
+       * Chrome can occasionally stop continuous
+       * speech recognition.
+       *
+       * Automatically restart while the user
+       * still wants to listen.
+       */
+
+      if (shouldRestart) {
+
+        status.textContent =
+          'Reconnecting speech recognition...';
+
+        setTimeout(
+          function() {
+
+            try {
+              recognition.start();
+            } catch (e) {
+              console.log(e);
+            }
+
+          },
+          500
+        );
+
+      } else {
+
+        status.textContent =
+          'Ready';
+
+      }
+
+    };
+
+
+  /*
+   * ==========================================================
+   * ERROR EVENT
+   * ==========================================================
+   */
+
+  recognition.onerror =
+    function(event) {
+
+      console.error(
+        'Speech error:',
+        event
+      );
+
+      status.textContent =
+        'Speech error: ' +
+        event.error;
+
+      /*
+       * Some errors are recoverable.
+       */
+
+      if (
+        event.error === 'no-speech' ||
+        event.error === 'aborted'
+      ) {
+
+        return;
+
+      }
+
+      if (
+        event.error === 'not-allowed' ||
+        event.error === 'service-not-allowed'
+      ) {
+
+        shouldRestart = false;
+
+        showError(
+          'Chrome denied speech recognition permission.\n\n' +
+          'Microphone permission and Speech Recognition permission ' +
+          'are separate browser permissions.'
+        );
+
+      }
+
+    };
+
+
+  /*
+   * ==========================================================
+   * RESULT EVENT
+   * ==========================================================
+   */
+
+  recognition.onresult =
+    function(event) {
+
+      let interim = '';
+
+      for (
+        let i = event.resultIndex;
+        i < event.results.length;
+        i++
+      ) {
+
+        const text =
+          event.results[i][0].transcript;
+
+
+        if (
+          event.results[i].isFinal
+        ) {
+
+          const cleanText =
+            text.trim();
+
+          if (cleanText) {
+
+            finalTranscript +=
+              cleanText + ' ';
+
+            sendToGoogleSheet(
+              cleanText
+            );
+
+          }
+
+        } else {
+
+          interim += text;
+
+        }
+
+      }
+
+
+      transcript.innerHTML =
+        escapeHtml(finalTranscript) +
+        '<span id="interim">' +
+        escapeHtml(interim) +
+        '</span>';
+
+    };
+
+}
+
+
+/*
+ * ============================================================
+ * SEND TO APPS SCRIPT
+ * ============================================================
+ */
+
+function sendToGoogleSheet(text) {
+
+  log.textContent =
+    'Sending: ' + text;
+
+
+  /*
+   * We intentionally use a simple POST.
+   *
+   * This avoids an OPTIONS/CORS preflight.
+   */
+
+  fetch(
+    APPS_SCRIPT_URL,
+    {
+      method: 'POST',
+
+      mode: 'no-cors',
+
+      headers: {
+        'Content-Type':
+          'text/plain;charset=UTF-8'
+      },
+
+      body: JSON.stringify({
+        text: text
+      })
+    }
+  )
+  .then(
+    function() {
+
+      log.textContent =
+        '✓ Sent to Google Sheet: ' +
+        text;
+
+    }
+  )
+  .catch(
+    function(error) {
+
+      log.textContent =
+        '❌ Send failed: ' +
+        error;
+
+    }
+  );
+
+}
+
+
+/*
+ * ============================================================
+ * ERROR DISPLAY
+ * ============================================================
+ */
+
+function showError(message) {
+
+  status.textContent =
+    '❌ Error';
+
+  log.textContent =
+    message;
+
+  console.error(message);
+
+}
+
+
+/*
+ * ============================================================
+ * HTML ESCAPE
+ * ============================================================
+ */
+
+function escapeHtml(text) {
+
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+
+}
+
+</script>
+
+</body>
+</html>
